@@ -2,7 +2,6 @@ package vrf
 
 import (
 	"fmt"
-	"log"
 
 	"github.com/vishvananda/netlink"
 )
@@ -21,10 +20,10 @@ func Find(name string) (*netlink.Vrf, error) {
 }
 
 // Create creates a new VRF and sets it up
-func Create(name string) error {
+func Create(name string) (*netlink.Vrf, error) {
 	tableID, err := findFreeRoutingTableID()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	vrf := &netlink.Vrf{LinkAttrs: netlink.LinkAttrs{
 		Name: name,
@@ -33,13 +32,14 @@ func Create(name string) error {
 
 	err = netlink.LinkAdd(vrf)
 	if err != nil {
-		return fmt.Errorf("could not add VRF %s: %v", name, err)
+		return nil, fmt.Errorf("could not add VRF %s: %v", name, err)
 	}
 	err = netlink.LinkSetUp(vrf)
 	if err != nil {
-		log.Fatalf("could not set link up for VRF %s: %v", name, err)
+		return nil, fmt.Errorf("could not set link up for VRF %s: %v", name, err)
 	}
-	return nil
+
+	return vrf, nil
 }
 
 // Retrieve
@@ -48,9 +48,13 @@ func getAssignedInterfaces(vrf *netlink.Vrf) ([]netlink.Link, error) {
 	if err != nil {
 		return nil, fmt.Errorf("getAssignedInterfaces: Failed to find links %v", err)
 	}
+	res := make([]netlink.Link, 0)
 	for _, l := range links {
-
+		if l.Attrs().MasterIndex == vrf.Index {
+			res = append(res, l)
+		}
 	}
+	return res, nil
 }
 
 // AddInterface adds the given interface to the VRF

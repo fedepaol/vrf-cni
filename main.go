@@ -3,15 +3,14 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"path/filepath"
-	"strings"
+
+	"github.com/fedepaol/vrfcni/vrf"
+	"github.com/vishvananda/netlink"
 
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
 	"github.com/containernetworking/cni/pkg/types/current"
 	"github.com/containernetworking/cni/pkg/version"
-	"github.com/j-keck/arping"
 
 	"github.com/containernetworking/plugins/pkg/ns"
 	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
@@ -69,46 +68,20 @@ func cmdAdd(args *skel.CmdArgs) error {
 	}
 
 	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
-		for key, value := range tuningConf.SysCtl {
-			fileName := filepath.Join("/proc/sys", strings.Replace(key, ".", "/", -1))
-			fileName = filepath.Clean(fileName)
-
-			// Refuse to modify sysctl parameters that don't belong
-			// to the network subsystem.
-			if !strings.HasPrefix(fileName, "/proc/sys/net/") {
-				return fmt.Errorf("invalid net sysctl key: %q", key)
+		v, err := vrf.Find(conf.Vrf)
+		if err != nil {
+			_, ok := err.(netlink.LinkNotFoundError)
+			if !ok {
+				return err
 			}
-			content := []byte(value)
-			err := ioutil.WriteFile(fileName, content, 0644)
+			v, err = vrf.Create(conf.Vrf)
 			if err != nil {
 				return err
 			}
 		}
-
-		if tuningConf.Mac != "" {
-			if err = changeMacAddr(args.IfName, tuningConf.Mac); err != nil {
-				return err
-			}
-
-			for _, ipc := range result.IPs {
-				if ipc.Version == "4" {
-					_ = arping.GratuitousArpOverIfaceByName(ipc.Address.IP, args.IfName)
-				}
-			}
-
-			updateResultsMacAddr(*tuningConf, args.IfName, tuningConf.Mac)
-		}
-
-		if tuningConf.Promisc != false {
-			if err = changePromisc(args.IfName, true); err != nil {
-				return err
-			}
-		}
-
-		if tuningConf.Mtu != 0 {
-			if err = changeMtu(args.IfName, tuningConf.Mtu); err != nil {
-				return err
-			}
+		err = vrf.AddInterface(v, args.IfName)
+		if err != nil {
+			return err
 		}
 		return nil
 	})
