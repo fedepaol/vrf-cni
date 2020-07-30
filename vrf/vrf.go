@@ -42,8 +42,8 @@ func Create(name string) (*netlink.Vrf, error) {
 	return vrf, nil
 }
 
-// Retrieve
-func getAssignedInterfaces(vrf *netlink.Vrf) ([]netlink.Link, error) {
+// AssignedInterfaces returns the list of interfaces associated to the given vrf.
+func AssignedInterfaces(vrf *netlink.Vrf) ([]netlink.Link, error) {
 	links, err := netlink.LinkList()
 	if err != nil {
 		return nil, fmt.Errorf("getAssignedInterfaces: Failed to find links %v", err)

@@ -86,6 +86,10 @@ func cmdAdd(args *skel.CmdArgs) error {
 		return nil
 	})
 
+	if err != nil {
+		return err
+	}
+
 	if result == nil {
 		result = &current.Result{}
 	}
@@ -94,21 +98,36 @@ func cmdAdd(args *skel.CmdArgs) error {
 }
 
 func cmdDel(args *skel.CmdArgs) error {
-	conf, result, err := parseConf(args.StdinData)
+	conf, _, err := parseConf(args.StdinData)
 	if err != nil {
 		return err
 	}
-	// TODO
-
+	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
+		v, err := vrf.Find(conf.Vrf)
+		if err != nil {
+			return err
+		}
+		interfaces, err := vrf.AssignedInterfaces(v)
+		if err != nil {
+			return err
+		}
+		if len(interfaces) == 0 {
+			err = netlink.LinkDel(v)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	return nil
 }
 
 func main() {
-	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.PluginSupports("0.4.0"), bv.BuildString("firewall"))
+	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.PluginSupports("0.4.0"), bv.BuildString("vrf"))
 }
 
 func cmdCheck(args *skel.CmdArgs) error {
-	conf, result, err := parseConf(args.StdinData)
+	conf, _, err := parseConf(args.StdinData)
 	if err != nil {
 		return err
 	}
@@ -118,7 +137,25 @@ func cmdCheck(args *skel.CmdArgs) error {
 		return fmt.Errorf("missing prevResult from earlier plugin")
 	}
 
-	// TODO
+	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
+		v, err := vrf.Find(conf.Vrf)
+		if err != nil {
+			return err
+		}
+		ii, err := vrf.AssignedInterfaces(v)
+
+		found := false
+		for _, i := range ii {
+			if i.Attrs().Name == args.IfName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("Failed to find %s associated to vrf %s", args.IfName, conf.Vrf)
+		}
+		return nil
+	})
 
 	return nil
 }
