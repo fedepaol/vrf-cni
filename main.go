@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/fedepaol/vrfcni/vrf"
@@ -24,35 +25,8 @@ type VrfNetConf struct {
 	VrfName string `json:"vrfname"`
 }
 
-func parseConf(data []byte) (*VrfNetConf, *current.Result, error) {
-	conf := VrfNetConf{}
-	if err := json.Unmarshal(data, &conf); err != nil {
-		return nil, nil, fmt.Errorf("failed to load netconf: %v", err)
-	}
-
-	if conf.VrfName == "" {
-		return nil, nil, fmt.Errorf("configuration is expected to have a valid vrf name")
-	}
-
-	// Parse previous result.
-	if conf.RawPrevResult == nil {
-		// return early if there was no previous result, which is allowed for DEL calls
-		return &conf, &current.Result{}, nil
-	}
-
-	// Parse previous result.
-	var result *current.Result
-	var err error
-	if err = version.ParsePrevResult(&conf.NetConf); err != nil {
-		return nil, nil, fmt.Errorf("could not parse prevResult: %v", err)
-	}
-
-	result, err = current.NewResultFromResult(conf.PrevResult)
-	if err != nil {
-		return nil, nil, fmt.Errorf("could not convert result to current version: %v", err)
-	}
-
-	return &conf, result, nil
+func main() {
+	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.PluginSupports("0.4.0"), bv.BuildString("vrf"))
 }
 
 func cmdAdd(args *skel.CmdArgs) error {
@@ -67,16 +41,15 @@ func cmdAdd(args *skel.CmdArgs) error {
 
 	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
 		v, err := vrf.Find(conf.VrfName)
-		if err != nil {
-			_, ok := err.(netlink.LinkNotFoundError)
-			if !ok {
-				return err
-			}
+
+		var e *netlink.LinkNotFoundError
+		if errors.As(err, &e) {
 			v, err = vrf.Create(conf.VrfName)
-			if err != nil {
-				return err
-			}
 		}
+		if err != nil {
+			return err
+		}
+
 		err = vrf.AddInterface(v, args.IfName)
 		if err != nil {
 			return err
@@ -85,7 +58,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 	})
 
 	if err != nil {
-		return err
+		return fmt.Errorf("cmdAdd failed: %v", err)
 	}
 
 	if result == nil {
@@ -118,13 +91,13 @@ func cmdDel(args *skel.CmdArgs) error {
 				return err
 			}
 		}
-		return fmt.Errorf("Interfaces %v", interfaces)
+		return err
 	})
-	return nil
-}
 
-func main() {
-	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.PluginSupports("0.4.0"), bv.BuildString("vrf"))
+	if err != nil {
+		return fmt.Errorf("cmdDel failed: %v", err)
+	}
+	return nil
 }
 
 func cmdCheck(args *skel.CmdArgs) error {
@@ -159,4 +132,35 @@ func cmdCheck(args *skel.CmdArgs) error {
 	})
 
 	return nil
+}
+
+func parseConf(data []byte) (*VrfNetConf, *current.Result, error) {
+	conf := VrfNetConf{}
+	if err := json.Unmarshal(data, &conf); err != nil {
+		return nil, nil, fmt.Errorf("failed to load netconf: %v", err)
+	}
+
+	if conf.VrfName == "" {
+		return nil, nil, fmt.Errorf("configuration is expected to have a valid vrf name")
+	}
+
+	// Parse previous result.
+	if conf.RawPrevResult == nil {
+		// return early if there was no previous result, which is allowed for DEL calls
+		return &conf, &current.Result{}, nil
+	}
+
+	// Parse previous result.
+	var result *current.Result
+	var err error
+	if err = version.ParsePrevResult(&conf.NetConf); err != nil {
+		return nil, nil, fmt.Errorf("could not parse prevResult: %v", err)
+	}
+
+	result, err = current.NewResultFromResult(conf.PrevResult)
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not convert result to current version: %v", err)
+	}
+
+	return &conf, result, nil
 }
