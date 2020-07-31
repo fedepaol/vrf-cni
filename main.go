@@ -21,9 +21,7 @@ type VrfNetConf struct {
 	types.NetConf
 
 	// Vrf is the name of the vrf to add the interface to.
-	Vrf string `json:"vrf"`
-	// RoutingTable is the name of the routing table associated to the vrf.
-	RoutingTable string `json:"routingtable`
+	VrfName string `json:"vrfname"`
 }
 
 func parseConf(data []byte) (*VrfNetConf, *current.Result, error) {
@@ -32,7 +30,7 @@ func parseConf(data []byte) (*VrfNetConf, *current.Result, error) {
 		return nil, nil, fmt.Errorf("failed to load netconf: %v", err)
 	}
 
-	if conf.Vrf == "" {
+	if conf.VrfName == "" {
 		return nil, nil, fmt.Errorf("configuration is expected to have a valid vrf name")
 	}
 
@@ -68,13 +66,13 @@ func cmdAdd(args *skel.CmdArgs) error {
 	}
 
 	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
-		v, err := vrf.Find(conf.Vrf)
+		v, err := vrf.Find(conf.VrfName)
 		if err != nil {
 			_, ok := err.(netlink.LinkNotFoundError)
 			if !ok {
 				return err
 			}
-			v, err = vrf.Create(conf.Vrf)
+			v, err = vrf.Create(conf.VrfName)
 			if err != nil {
 				return err
 			}
@@ -103,21 +101,24 @@ func cmdDel(args *skel.CmdArgs) error {
 		return err
 	}
 	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
-		v, err := vrf.Find(conf.Vrf)
+		v, err := vrf.Find(conf.VrfName)
 		if err != nil {
 			return err
 		}
+
 		interfaces, err := vrf.AssignedInterfaces(v)
 		if err != nil {
 			return err
 		}
-		if len(interfaces) == 0 {
+
+		// Meaning, we are deleting the last interface assigned to the VRF
+		if len(interfaces) == 1 && interfaces[0].Attrs().Name == args.IfName {
 			err = netlink.LinkDel(v)
 			if err != nil {
 				return err
 			}
 		}
-		return nil
+		return fmt.Errorf("Interfaces %v", interfaces)
 	})
 	return nil
 }
@@ -138,7 +139,7 @@ func cmdCheck(args *skel.CmdArgs) error {
 	}
 
 	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
-		v, err := vrf.Find(conf.Vrf)
+		v, err := vrf.Find(conf.VrfName)
 		if err != nil {
 			return err
 		}
@@ -152,7 +153,7 @@ func cmdCheck(args *skel.CmdArgs) error {
 			}
 		}
 		if !found {
-			return fmt.Errorf("Failed to find %s associated to vrf %s", args.IfName, conf.Vrf)
+			return fmt.Errorf("Failed to find %s associated to vrf %s", args.IfName, conf.VrfName)
 		}
 		return nil
 	})
