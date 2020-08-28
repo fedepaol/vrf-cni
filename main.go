@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/fedepaol/vrfcni/vrf"
@@ -22,7 +21,7 @@ type VrfNetConf struct {
 	types.NetConf
 
 	// Vrf is the name of the vrf to add the interface to.
-	VrfName string `json:"vrfname"`
+	VRFName string `json:"vrfname"`
 }
 
 func main() {
@@ -40,12 +39,12 @@ func cmdAdd(args *skel.CmdArgs) error {
 	}
 
 	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
-		v, err := vrf.Find(conf.VrfName)
+		v, err := vrf.Find(conf.VRFName)
 
-		var e *netlink.LinkNotFoundError
-		if errors.As(err, &e) {
-			v, err = vrf.Create(conf.VrfName)
+		if _, ok := err.(netlink.LinkNotFoundError); ok {
+			v, err = vrf.Create(conf.VRFName)
 		}
+
 		if err != nil {
 			return err
 		}
@@ -74,7 +73,7 @@ func cmdDel(args *skel.CmdArgs) error {
 		return err
 	}
 	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
-		v, err := vrf.Find(conf.VrfName)
+		v, err := vrf.Find(conf.VRFName)
 		if err != nil {
 			return err
 		}
@@ -112,7 +111,7 @@ func cmdCheck(args *skel.CmdArgs) error {
 	}
 
 	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
-		v, err := vrf.Find(conf.VrfName)
+		v, err := vrf.Find(conf.VRFName)
 		if err != nil {
 			return err
 		}
@@ -126,7 +125,7 @@ func cmdCheck(args *skel.CmdArgs) error {
 			}
 		}
 		if !found {
-			return fmt.Errorf("Failed to find %s associated to vrf %s", args.IfName, conf.VrfName)
+			return fmt.Errorf("Failed to find %s associated to vrf %s", args.IfName, conf.VRFName)
 		}
 		return nil
 	})
@@ -140,7 +139,7 @@ func parseConf(data []byte) (*VrfNetConf, *current.Result, error) {
 		return nil, nil, fmt.Errorf("failed to load netconf: %v", err)
 	}
 
-	if conf.VrfName == "" {
+	if conf.VRFName == "" {
 		return nil, nil, fmt.Errorf("configuration is expected to have a valid vrf name")
 	}
 

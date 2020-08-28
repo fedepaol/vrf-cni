@@ -25,10 +25,12 @@ func Create(name string) (*netlink.Vrf, error) {
 	if err != nil {
 		return nil, err
 	}
-	vrf := &netlink.Vrf{LinkAttrs: netlink.LinkAttrs{
-		Name: name,
-	},
-		Table: tableID}
+	vrf := &netlink.Vrf{
+		LinkAttrs: netlink.LinkAttrs{
+			Name: name,
+		},
+		Table: tableID,
+	}
 
 	err = netlink.LinkAdd(vrf)
 	if err != nil {
@@ -61,7 +63,7 @@ func AssignedInterfaces(vrf *netlink.Vrf) ([]netlink.Link, error) {
 func AddInterface(vrf *netlink.Vrf, intf string) error {
 	i, err := netlink.LinkByName(intf)
 	if err != nil {
-		return fmt.Errorf("could not get link by name")
+		return fmt.Errorf("could not get link by name %s", intf)
 	}
 	err = netlink.LinkSetMaster(i, vrf)
 	if err != nil {
