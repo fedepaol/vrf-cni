@@ -62,7 +62,12 @@ func buildOneConfig(name, cniVersion string, orig *VrfNetConf, prevResult types.
 var _ = Describe("vrf plugin", func() {
 	var originalNS ns.NetNS
 	var targetNS ns.NetNS
-	const IFNAME string = "dummy0"
+	const (
+		IF0Name  = "dummy0"
+		IF1Name  = "dummy1"
+		VRF0Name = "vrf0"
+		VRF1Name = "vrf1"
+	)
 
 	BeforeEach(func() {
 		var err error
@@ -77,11 +82,20 @@ var _ = Describe("vrf plugin", func() {
 
 			err = netlink.LinkAdd(&netlink.Dummy{
 				LinkAttrs: netlink.LinkAttrs{
-					Name: IFNAME,
+					Name: IF0Name,
 				},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = netlink.LinkByName(IFNAME)
+			_, err = netlink.LinkByName(IF0Name)
+			Expect(err).NotTo(HaveOccurred())
+
+			err = netlink.LinkAdd(&netlink.Dummy{
+				LinkAttrs: netlink.LinkAttrs{
+					Name: IF1Name,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = netlink.LinkByName(IF0Name)
 			Expect(err).NotTo(HaveOccurred())
 			return nil
 		})
@@ -94,30 +108,12 @@ var _ = Describe("vrf plugin", func() {
 	})
 
 	It("passes prevResult through unchanged", func() {
-		conf := []byte(`{
-			"name": "test",
-			"type": "vrf",
-			"cniVersion": "0.3.1",
-			"vrfName": "blue",
-			"prevResult": {
-				"interfaces": [
-					{"name": "dummy0", "sandbox":"netns"}
-				],
-				"ips": [
-					{
-						"version": "4",
-						"address": "10.0.0.2/24",
-						"gateway": "10.0.0.1",
-						"interface": 0
-					}
-				]
-			}
-		}`)
+		conf := confFor("test", IF0Name, VRF0Name, "10.0.0.2")
 
 		args := &skel.CmdArgs{
 			ContainerID: "dummy",
 			Netns:       targetNS.Path(),
-			IfName:      IFNAME,
+			IfName:      IF0Name,
 			StdinData:   conf,
 		}
 
@@ -133,7 +129,7 @@ var _ = Describe("vrf plugin", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(len(result.Interfaces)).To(Equal(1))
-			Expect(result.Interfaces[0].Name).To(Equal(IFNAME))
+			Expect(result.Interfaces[0].Name).To(Equal(IF0Name))
 			Expect(len(result.IPs)).To(Equal(1))
 			Expect(result.IPs[0].Address.String()).To(Equal("10.0.0.2/24"))
 			return nil
@@ -142,30 +138,12 @@ var _ = Describe("vrf plugin", func() {
 	})
 
 	It("configures a VRF and adds the interface to it", func() {
-		conf := []byte(`{
-			"name": "test",
-			"type": "vrf",
-			"cniVersion": "0.3.1",
-			"vrfName": "blue",
-			"prevResult": {
-				"interfaces": [
-					{"name": "dummy0", "sandbox":"netns"}
-				],
-				"ips": [
-					{
-						"version": "4",
-						"address": "10.0.0.2/24",
-						"gateway": "10.0.0.1",
-						"interface": 0
-					}
-				]
-			}
-		}`)
+		conf := confFor("test", IF0Name, VRF0Name, "10.0.0.2")
 
 		args := &skel.CmdArgs{
 			ContainerID: "dummy",
 			Netns:       targetNS.Path(),
-			IfName:      IFNAME,
+			IfName:      IF0Name,
 			StdinData:   conf,
 		}
 
@@ -180,16 +158,83 @@ var _ = Describe("vrf plugin", func() {
 
 		err = targetNS.Do(func(ns.NetNS) error {
 			defer GinkgoRecover()
-			vrf, err := netlink.LinkByName("blue")
+			vrf, err := netlink.LinkByName(VRF0Name)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(vrf).To(BeAssignableToTypeOf(&netlink.Vrf{}))
 
-			link, err := netlink.LinkByName(IFNAME)
+			link, err := netlink.LinkByName(IF0Name)
 			Expect(err).NotTo(HaveOccurred())
 			masterIndx := link.Attrs().MasterIndex
 			master, err := netlink.LinkByIndex(masterIndx)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(master.Attrs().Name).To(Equal("blue"))
+			Expect(master.Attrs().Name).To(Equal(VRF0Name))
+			return nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("configures a VRF and adds two interfaces to it", func() {
+		conf := confFor("test", IF0Name, VRF0Name, "10.0.0.2")
+		conf1 := confFor("test1", IF1Name, VRF0Name, "10.0.0.2")
+
+		err := originalNS.Do(func(ns.NetNS) error {
+			defer GinkgoRecover()
+			args := &skel.CmdArgs{
+				ContainerID: "dummy",
+				Netns:       targetNS.Path(),
+				IfName:      IF0Name,
+				StdinData:   conf,
+			}
+			_, _, err := testutils.CmdAddWithArgs(args, func() error {
+				return cmdAdd(args)
+			})
+			Expect(err).NotTo(HaveOccurred())
+			return nil
+		})
+
+		err = targetNS.Do(func(ns.NetNS) error {
+			defer GinkgoRecover()
+			vrf, err := netlink.LinkByName(VRF0Name)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(vrf).To(BeAssignableToTypeOf(&netlink.Vrf{}))
+
+			link, err := netlink.LinkByName(IF0Name)
+			Expect(err).NotTo(HaveOccurred())
+			masterIndx := link.Attrs().MasterIndex
+			master, err := netlink.LinkByIndex(masterIndx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(master.Attrs().Name).To(Equal(VRF0Name))
+			return nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		err = originalNS.Do(func(ns.NetNS) error {
+			defer GinkgoRecover()
+			args := &skel.CmdArgs{
+				ContainerID: "dummy",
+				Netns:       targetNS.Path(),
+				IfName:      IF1Name,
+				StdinData:   conf1,
+			}
+			_, _, err := testutils.CmdAddWithArgs(args, func() error {
+				return cmdAdd(args)
+			})
+			Expect(err).NotTo(HaveOccurred())
+			return nil
+		})
+
+		err = targetNS.Do(func(ns.NetNS) error {
+			defer GinkgoRecover()
+			vrf, err := netlink.LinkByName(VRF0Name)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(vrf).To(BeAssignableToTypeOf(&netlink.Vrf{}))
+
+			link, err := netlink.LinkByName(IF1Name)
+			Expect(err).NotTo(HaveOccurred())
+			masterIndx := link.Attrs().MasterIndex
+			master, err := netlink.LinkByIndex(masterIndx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(master.Attrs().Name).To(Equal(VRF0Name))
 			return nil
 		})
 		Expect(err).NotTo(HaveOccurred())
@@ -268,3 +313,26 @@ var _ = Describe("vrf plugin", func() {
 			})*/
 
 })
+
+func confFor(name, intf, vrf, ip string) []byte {
+	conf := fmt.Sprintf(`{
+		"name": "%s",
+		"type": "vrf",
+		"cniVersion": "0.3.1",
+		"vrfName": "%s",
+		"prevResult": {
+			"interfaces": [
+				{"name": "%s", "sandbox":"netns"}
+			],
+			"ips": [
+				{
+					"version": "4",
+					"address": "%s/24",
+					"gateway": "10.0.0.1",
+					"interface": 0
+				}
+			]
+		}
+	}`, name, vrf, intf, ip)
+	return []byte(conf)
+}
