@@ -13,6 +13,7 @@ import (
 	"github.com/vishvananda/netlink"
 
 	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/extensions/table"
 	. "github.com/onsi/gomega"
 )
 
@@ -108,7 +109,7 @@ var _ = Describe("vrf plugin", func() {
 	})
 
 	It("passes prevResult through unchanged", func() {
-		conf := confFor("test", IF0Name, VRF0Name, "10.0.0.2")
+		conf := confFor("test", IF0Name, VRF0Name, "10.0.0.2/24")
 
 		args := &skel.CmdArgs{
 			ContainerID: "dummy",
@@ -138,7 +139,7 @@ var _ = Describe("vrf plugin", func() {
 	})
 
 	It("configures a VRF and adds the interface to it", func() {
-		conf := confFor("test", IF0Name, VRF0Name, "10.0.0.2")
+		conf := confFor("test", IF0Name, VRF0Name, "10.0.0.2/24")
 
 		args := &skel.CmdArgs{
 			ContainerID: "dummy",
@@ -173,72 +174,156 @@ var _ = Describe("vrf plugin", func() {
 		Expect(err).NotTo(HaveOccurred())
 	})
 
-	It("configures a VRF and adds two interfaces to it", func() {
-		conf := confFor("test", IF0Name, VRF0Name, "10.0.0.2")
-		conf1 := confFor("test1", IF1Name, VRF0Name, "10.0.0.2")
+	DescribeTable("With two Interfaces",
+		func(vrf0, vrf1, ip0, ip1 string) {
+			conf0 := confFor("test", IF0Name, vrf0, ip0)
+			conf1 := confFor("test1", IF1Name, vrf1, ip1)
 
-		err := originalNS.Do(func(ns.NetNS) error {
-			defer GinkgoRecover()
-			args := &skel.CmdArgs{
-				ContainerID: "dummy",
-				Netns:       targetNS.Path(),
-				IfName:      IF0Name,
-				StdinData:   conf,
-			}
-			_, _, err := testutils.CmdAddWithArgs(args, func() error {
-				return cmdAdd(args)
+			addr0, err := netlink.ParseAddr(ip0)
+			fmt.Printf("FEDE Addr %s\n", addr0)
+			Expect(err).NotTo(HaveOccurred())
+			addr1, err := netlink.ParseAddr(ip1)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Setting the first interface's ip", func() {
+				err := targetNS.Do(func(ns.NetNS) error {
+					l, err := netlink.LinkByName(IF0Name)
+					Expect(err).NotTo(HaveOccurred())
+
+					err = netlink.AddrAdd(l, addr0)
+					Expect(err).NotTo(HaveOccurred())
+					addresses, err := netlink.AddrList(l, netlink.FAMILY_ALL)
+					fmt.Println("FEDE", addresses)
+
+					return nil
+				})
+				Expect(err).NotTo(HaveOccurred())
 			})
-			Expect(err).NotTo(HaveOccurred())
-			return nil
-		})
 
-		err = targetNS.Do(func(ns.NetNS) error {
-			defer GinkgoRecover()
-			vrf, err := netlink.LinkByName(VRF0Name)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(vrf).To(BeAssignableToTypeOf(&netlink.Vrf{}))
-
-			link, err := netlink.LinkByName(IF0Name)
-			Expect(err).NotTo(HaveOccurred())
-			masterIndx := link.Attrs().MasterIndex
-			master, err := netlink.LinkByIndex(masterIndx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(master.Attrs().Name).To(Equal(VRF0Name))
-			return nil
-		})
-		Expect(err).NotTo(HaveOccurred())
-
-		err = originalNS.Do(func(ns.NetNS) error {
-			defer GinkgoRecover()
-			args := &skel.CmdArgs{
-				ContainerID: "dummy",
-				Netns:       targetNS.Path(),
-				IfName:      IF1Name,
-				StdinData:   conf1,
-			}
-			_, _, err := testutils.CmdAddWithArgs(args, func() error {
-				return cmdAdd(args)
+			By("Adding the first interface to first vrf", func() {
+				err := originalNS.Do(func(ns.NetNS) error {
+					defer GinkgoRecover()
+					args := &skel.CmdArgs{
+						ContainerID: "dummy",
+						Netns:       targetNS.Path(),
+						IfName:      IF0Name,
+						StdinData:   conf0,
+					}
+					_, _, err := testutils.CmdAddWithArgs(args, func() error {
+						return cmdAdd(args)
+					})
+					Expect(err).NotTo(HaveOccurred())
+					return nil
+				})
+				Expect(err).NotTo(HaveOccurred())
 			})
-			Expect(err).NotTo(HaveOccurred())
-			return nil
-		})
 
-		err = targetNS.Do(func(ns.NetNS) error {
-			defer GinkgoRecover()
-			vrf, err := netlink.LinkByName(VRF0Name)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(vrf).To(BeAssignableToTypeOf(&netlink.Vrf{}))
+			By("Setting the second interface's ip", func() {
+				err := targetNS.Do(func(ns.NetNS) error {
+					l, err := netlink.LinkByName(IF1Name)
+					Expect(err).NotTo(HaveOccurred())
 
-			link, err := netlink.LinkByName(IF1Name)
-			Expect(err).NotTo(HaveOccurred())
-			masterIndx := link.Attrs().MasterIndex
-			master, err := netlink.LinkByIndex(masterIndx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(master.Attrs().Name).To(Equal(VRF0Name))
-			return nil
-		})
-		Expect(err).NotTo(HaveOccurred())
-	})
+					err = netlink.AddrAdd(l, addr1)
+					Expect(err).NotTo(HaveOccurred())
+					return nil
+				})
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			By("Adding the second interface to second vrf", func() {
+				err := originalNS.Do(func(ns.NetNS) error {
+					defer GinkgoRecover()
+					args := &skel.CmdArgs{
+						ContainerID: "dummy",
+						Netns:       targetNS.Path(),
+						IfName:      IF1Name,
+						StdinData:   conf1,
+					}
+					_, _, err := testutils.CmdAddWithArgs(args, func() error {
+						return cmdAdd(args)
+					})
+					Expect(err).NotTo(HaveOccurred())
+					return nil
+				})
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			By("Checking that the first interface is added to first vrf", func() {
+				err := targetNS.Do(func(ns.NetNS) error {
+					defer GinkgoRecover()
+
+					vrf, err := netlink.LinkByName(vrf0)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(vrf).To(BeAssignableToTypeOf(&netlink.Vrf{}))
+
+					link, err := netlink.LinkByName(IF0Name)
+					Expect(err).NotTo(HaveOccurred())
+					masterIndx := link.Attrs().MasterIndex
+					master, err := netlink.LinkByIndex(masterIndx)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(master.Attrs().Name).To(Equal(vrf0))
+
+					addresses, err := netlink.AddrList(link, netlink.FAMILY_ALL)
+					Expect(len(addresses)).To(Equal(1))
+					Expect(addresses[0].IP.Equal(addr0.IP)).To(BeTrue())
+					Expect(addresses[0].Mask).To(Equal(addr0.Mask))
+					return nil
+				})
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			By("Checking that the second interface is added to second vrf", func() {
+				err := targetNS.Do(func(ns.NetNS) error {
+					defer GinkgoRecover()
+					vrf, err := netlink.LinkByName(vrf1)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(vrf).To(BeAssignableToTypeOf(&netlink.Vrf{}))
+
+					link, err := netlink.LinkByName(IF1Name)
+					Expect(err).NotTo(HaveOccurred())
+					masterIndx := link.Attrs().MasterIndex
+					master, err := netlink.LinkByIndex(masterIndx)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(master.Attrs().Name).To(Equal(vrf1))
+
+					addresses, err := netlink.AddrList(link, netlink.FAMILY_ALL)
+					Expect(len(addresses)).To(Equal(1))
+					Expect(addresses[0].IP.Equal(addr1.IP)).To(BeTrue())
+					Expect(addresses[0].Mask).To(Equal(addr1.Mask))
+					return nil
+				})
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			By("Checking that when the vrfs are different, the routing table is different", func() {
+				if vrf0 == vrf1 {
+					return
+				}
+				err := targetNS.Do(func(ns.NetNS) error {
+					defer GinkgoRecover()
+					l0, err := netlink.LinkByName(vrf0)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(l0).To(BeAssignableToTypeOf(&netlink.Vrf{}))
+					l1, err := netlink.LinkByName(vrf1)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(l1).To(BeAssignableToTypeOf(&netlink.Vrf{}))
+
+					vrf0Link := l0.(*netlink.Vrf)
+					vrf1Link := l1.(*netlink.Vrf)
+					Expect(vrf0Link.Table).NotTo(Equal(vrf1Link.Table))
+					return nil
+				})
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+		},
+		Entry("added to the same vrf", VRF0Name, VRF0Name, "10.0.0.2/24", "10.0.0.3/24"),
+		Entry("added to different vrfs", VRF0Name, VRF1Name, "10.0.0.2/24", "10.0.0.3/24"),
+		Entry("added to different vrfs with same ip", VRF0Name, VRF1Name, "10.0.0.2/24", "10.0.0.2/24"),
+		FEntry("added to the same vrf IPV6", VRF0Name, VRF0Name, "2A00:0C98:2060:A000:0001:0000:1d1e:ca75/64", "2A00:0C98:2060:A000:0001:0000:1d1e:ca76/64"),
+		Entry("added to different vrfs IPV6", VRF0Name, VRF1Name, "2A00:0C98:2060:A000:0001:0000:1d1e:ca75/64", "2A00:0C98:2060:A000:0001:0000:1d1e:ca76/64"),
+		Entry("added to different vrfs with same ip IPV6", VRF0Name, VRF1Name, "2A00:0C98:2060:A000:0001:0000:1d1e:ca75/64", "2A00:0C98:2060:A000:0001:0000:1d1e:ca75/64"),
+	)
 
 	/*	It("configures and deconfigures promiscuous mode with CNI 0.4.0 ADD/DEL", func() {
 				conf := []byte(`{
@@ -327,7 +412,7 @@ func confFor(name, intf, vrf, ip string) []byte {
 			"ips": [
 				{
 					"version": "4",
-					"address": "%s/24",
+					"address": "%s",
 					"gateway": "10.0.0.1",
 					"interface": 0
 				}

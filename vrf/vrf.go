@@ -65,10 +65,26 @@ func AddInterface(vrf *netlink.Vrf, intf string) error {
 	if err != nil {
 		return fmt.Errorf("could not get link by name %s", intf)
 	}
+
+	// IPV6 addresses are not maintained unless
+	// sysctl -w net.ipv6.conf.all.keep_addr_on_down=1 is called
+	// so we save it, and restore it back.
+	addresses, err := netlink.AddrList(i, netlink.FAMILY_V6)
+	if err != nil {
+		return fmt.Errorf("failed getting ipv6 addresses for %s", intf)
+	}
 	err = netlink.LinkSetMaster(i, vrf)
 	if err != nil {
 		return fmt.Errorf("could not set vrf %s as master of %s: %v", vrf.Name, intf, err)
 	}
+
+	for _, addr := range addresses {
+		err = netlink.AddrAdd(i, &addr)
+		if err != nil {
+			return fmt.Errorf("could not restore address %s to %s @ %s: %v", addr, intf, vrf.Name, err)
+		}
+	}
+
 	return nil
 }
 
