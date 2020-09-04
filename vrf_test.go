@@ -341,7 +341,7 @@ var _ = Describe("vrf plugin", func() {
 			})
 		})
 
-		By("Removing the first interface from VRF", func() {
+		By("Removing the first interface from VRF, removing the interface", func() {
 			err := originalNS.Do(func(ns.NetNS) error {
 				defer GinkgoRecover()
 				args := &skel.CmdArgs{
@@ -357,90 +357,138 @@ var _ = Describe("vrf plugin", func() {
 				return nil
 			})
 			Expect(err).NotTo(HaveOccurred())
+
+			err = targetNS.Do(func(ns.NetNS) error {
+				link, err := netlink.LinkByName(IF0Name)
+				Expect(err).NotTo(HaveOccurred())
+				err = netlink.LinkDel(link)
+				Expect(err).NotTo(HaveOccurred())
+				return nil
+			})
+			Expect(err).NotTo(HaveOccurred())
 		})
 
-		By("Checking that the first interface is removed from the VRF", func() {
+		By("Checking that the second interface is still on the VRF and that VRF still exists", func() {
 			targetNS.Do(func(ns.NetNS) error {
 				defer GinkgoRecover()
-				checkLinkHasNoMaster(IF0Name)
 				checkInterfaceOnVRF(VRF0Name, IF1Name)
 				return nil
 			})
 		})
 
-	})
-
-	/*	It("configures and deconfigures promiscuous mode with CNI 0.4.0 ADD/DEL", func() {
-				conf := []byte(`{
-			"name": "test",
-			"type": "iplink",
-			"cniVersion": "0.4.0",
-			"promisc": true,
-			"prevResult": {
-				"interfaces": [
-					{"name": "dummy0", "sandbox":"netns"}
-				],
-				"ips": [
-					{
-						"version": "4",
-						"address": "10.0.0.2/24",
-						"gateway": "10.0.0.1",
-						"interface": 0
-					}
-				]
-			}
-		}`)
-
+		By("Removing the second interface from VRF, deleting the second interface", func() {
+			err := originalNS.Do(func(ns.NetNS) error {
+				defer GinkgoRecover()
 				args := &skel.CmdArgs{
 					ContainerID: "dummy",
-					Netns:       originalNS.Path(),
-					IfName:      IFNAME,
-					StdinData:   conf,
+					Netns:       targetNS.Path(),
+					IfName:      IF1Name,
+					StdinData:   conf1,
 				}
-
-				err := originalNS.Do(func(ns.NetNS) error {
-					defer GinkgoRecover()
-
-					r, _, err := testutils.CmdAddWithArgs(args, func() error {
-						return cmdAdd(args)
-					})
-					Expect(err).NotTo(HaveOccurred())
-
-					result, err := current.GetResult(r)
-					Expect(err).NotTo(HaveOccurred())
-
-					Expect(len(result.Interfaces)).To(Equal(1))
-					Expect(result.Interfaces[0].Name).To(Equal(IFNAME))
-					Expect(len(result.IPs)).To(Equal(1))
-					Expect(result.IPs[0].Address.String()).To(Equal("10.0.0.2/24"))
-
-					link, err := netlink.LinkByName(IFNAME)
-					Expect(err).NotTo(HaveOccurred())
-					Expect(link.Attrs().Promisc).To(Equal(1))
-
-					n := &VrfNetConf{}
-					err = json.Unmarshal([]byte(conf), &n)
-					Expect(err).NotTo(HaveOccurred())
-
-					cniVersion := "0.4.0"
-					_, confString, err := buildOneConfig("testConfig", cniVersion, n, r)
-					Expect(err).NotTo(HaveOccurred())
-
-					args.StdinData = confString
-
-					err = testutils.CmdCheckWithArgs(args, func() error {
-						return cmdCheck(args)
-					})
-					Expect(err).NotTo(HaveOccurred())
-
-					err = testutils.CmdDel(originalNS.Path(),
-						args.ContainerID, "", func() error { return cmdDel(args) })
-					Expect(err).NotTo(HaveOccurred())
-
-					return nil
+				err := testutils.CmdDelWithArgs(args, func() error {
+					return cmdDel(args)
 				})
 				Expect(err).NotTo(HaveOccurred())
-			})*/
+				return nil
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			err = targetNS.Do(func(ns.NetNS) error {
+				link, err := netlink.LinkByName(IF1Name)
+				Expect(err).NotTo(HaveOccurred())
+				err = netlink.LinkDel(link)
+				Expect(err).NotTo(HaveOccurred())
+				return nil
+			})
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		By("Checking that the VRF is removed", func() {
+			targetNS.Do(func(ns.NetNS) error {
+				defer GinkgoRecover()
+				_, err := netlink.LinkByName(VRF0Name)
+				Expect(err).NotTo(BeNil())
+				return nil
+			})
+		})
+	})
+
+	It("configures and deconfigures mtu with CNI 0.4.0 ADD/DEL", func() {
+		conf := []byte(fmt.Sprintf(`{
+	"name": "test",
+	"type": "vrf",
+	"cniVersion": "0.4.0",
+	"vrfName": "%s",
+	"prevResult": {
+		"interfaces": [
+			{"name": "%s", "sandbox":"netns"}
+		],
+		"ips": [
+			{
+				"version": "4",
+				"address": "10.0.0.2/24",
+				"gateway": "10.0.0.1",
+				"interface": 0
+			}
+		]
+	}
+}`, VRF0Name, IF0Name))
+
+		args := &skel.CmdArgs{
+			ContainerID: "dummy",
+			Netns:       targetNS.Path(),
+			IfName:      IF0Name,
+			StdinData:   conf,
+		}
+		var prevRes types.Result
+		err := originalNS.Do(func(ns.NetNS) error {
+			defer GinkgoRecover()
+
+			prevRes, _, err := testutils.CmdAddWithArgs(args, func() error {
+				return cmdAdd(args)
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := current.GetResult(prevRes)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(len(result.Interfaces)).To(Equal(1))
+			Expect(result.Interfaces[0].Name).To(Equal(IF0Name))
+			Expect(len(result.IPs)).To(Equal(1))
+			Expect(result.IPs[0].Address.String()).To(Equal("10.0.0.2/24"))
+			return nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		err = targetNS.Do(func(ns.NetNS) error {
+			defer GinkgoRecover()
+			checkInterfaceOnVRF(VRF0Name, IF0Name)
+			return nil
+		})
+
+		err = originalNS.Do(func(ns.NetNS) error {
+			defer GinkgoRecover()
+			cniVersion := "0.4.0"
+			n := &VrfNetConf{}
+			err = json.Unmarshal([]byte(conf), &n)
+			_, confString, err := buildOneConfig("testConfig", cniVersion, n, prevRes)
+			Expect(err).NotTo(HaveOccurred())
+
+			args.StdinData = confString
+
+			err = testutils.CmdCheckWithArgs(args, func() error {
+				return cmdCheck(args)
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			err = testutils.CmdDel(originalNS.Path(),
+				args.ContainerID, "", func() error { return cmdDel(args) })
+			Expect(err).NotTo(HaveOccurred())
+
+			return nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+	})
 
 })
 
