@@ -1,10 +1,23 @@
+// Copyright 2020 CNI authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package main
 
 import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/fedepaol/vrfcni/vrf"
 	"github.com/vishvananda/netlink"
 
 	"github.com/containernetworking/cni/pkg/skel"
@@ -39,17 +52,17 @@ func cmdAdd(args *skel.CmdArgs) error {
 	}
 
 	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
-		v, err := vrf.Find(conf.VRFName)
+		v, err := findVRF(conf.VRFName)
 
 		if _, ok := err.(netlink.LinkNotFoundError); ok {
-			v, err = vrf.Create(conf.VRFName)
+			v, err = createVRF(conf.VRFName)
 		}
 
 		if err != nil {
 			return err
 		}
 
-		err = vrf.AddInterface(v, args.IfName)
+		err = addInterface(v, args.IfName)
 		if err != nil {
 			return err
 		}
@@ -73,12 +86,12 @@ func cmdDel(args *skel.CmdArgs) error {
 		return err
 	}
 	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
-		v, err := vrf.Find(conf.VRFName)
+		v, err := findVRF(conf.VRFName)
 		if err != nil {
 			return err
 		}
 
-		interfaces, err := vrf.AssignedInterfaces(v)
+		interfaces, err := assignedInterfaces(v)
 		if err != nil {
 			return err
 		}
@@ -111,11 +124,11 @@ func cmdCheck(args *skel.CmdArgs) error {
 	}
 
 	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
-		v, err := vrf.Find(conf.VRFName)
+		v, err := findVRF(conf.VRFName)
 		if err != nil {
 			return err
 		}
-		ii, err := vrf.AssignedInterfaces(v)
+		ii, err := assignedInterfaces(v)
 
 		found := false
 		for _, i := range ii {

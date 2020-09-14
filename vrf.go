@@ -1,13 +1,28 @@
-package vrf
+// Copyright 2020 CNI authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package main
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/vishvananda/netlink"
 )
 
-// Find finds a VRF link with the provided name
-func Find(name string) (*netlink.Vrf, error) {
+// findVRF finds a VRF link with the provided name.
+func findVRF(name string) (*netlink.Vrf, error) {
 	link, err := netlink.LinkByName(name)
 	if err != nil {
 		return nil, err
@@ -19,9 +34,13 @@ func Find(name string) (*netlink.Vrf, error) {
 	return vrf, nil
 }
 
-// Create creates a new VRF and sets it up
-func Create(name string) (*netlink.Vrf, error) {
-	tableID, err := findFreeRoutingTableID()
+// createVRF creates a new VRF and sets it up.
+func createVRF(name string) (*netlink.Vrf, error) {
+	links, err := netlink.LinkList()
+	if err != nil {
+		return nil, fmt.Errorf("createVRF: Failed to find links %v", err)
+	}
+	tableID, err := findFreeRoutingTableID(links)
 	if err != nil {
 		return nil, err
 	}
@@ -44,8 +63,8 @@ func Create(name string) (*netlink.Vrf, error) {
 	return vrf, nil
 }
 
-// AssignedInterfaces returns the list of interfaces associated to the given vrf.
-func AssignedInterfaces(vrf *netlink.Vrf) ([]netlink.Link, error) {
+// assignedInterfaces returns the list of interfaces associated to the given vrf.
+func assignedInterfaces(vrf *netlink.Vrf) ([]netlink.Link, error) {
 	links, err := netlink.LinkList()
 	if err != nil {
 		return nil, fmt.Errorf("getAssignedInterfaces: Failed to find links %v", err)
@@ -59,8 +78,8 @@ func AssignedInterfaces(vrf *netlink.Vrf) ([]netlink.Link, error) {
 	return res, nil
 }
 
-// AddInterface adds the given interface to the VRF
-func AddInterface(vrf *netlink.Vrf, intf string) error {
+// addInterface adds the given interface to the VRF
+func addInterface(vrf *netlink.Vrf, intf string) error {
 	i, err := netlink.LinkByName(intf)
 	if err != nil {
 		return fmt.Errorf("could not get link by name %s", intf)
@@ -102,18 +121,18 @@ CONTINUE:
 	return nil
 }
 
-func findFreeRoutingTableID() (uint32, error) {
-	var maxTable uint32
-	links, err := netlink.LinkList()
-	if err != nil {
-		return 0, fmt.Errorf("findFreeRoutingTableID: Failed to find links %v", err)
-	}
+func findFreeRoutingTableID(links []netlink.Link) (uint32, error) {
+	takenTables := make(map[uint32]struct{}, len(links))
 	for _, l := range links {
 		if vrf, ok := l.(*netlink.Vrf); ok {
-			if vrf.Table > maxTable {
-				maxTable = vrf.Table
-			}
+			takenTables[vrf.Table] = struct{}{}
 		}
 	}
-	return (maxTable + 1), nil
+
+	for res := uint32(1); res < math.MaxUint32; res++ {
+		if _, ok := takenTables[res]; !ok {
+			return res, nil
+		}
+	}
+	return 0, fmt.Errorf("findFreeRoutingTableID: Failed to find an available routing id")
 }
