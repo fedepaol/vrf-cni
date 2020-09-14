@@ -69,7 +69,7 @@ func AddInterface(vrf *netlink.Vrf, intf string) error {
 	// IPV6 addresses are not maintained unless
 	// sysctl -w net.ipv6.conf.all.keep_addr_on_down=1 is called
 	// so we save it, and restore it back.
-	addresses, err := netlink.AddrList(i, netlink.FAMILY_V6)
+	beforeAddresses, err := netlink.AddrList(i, netlink.FAMILY_V6)
 	if err != nil {
 		return fmt.Errorf("failed getting ipv6 addresses for %s", intf)
 	}
@@ -78,10 +78,24 @@ func AddInterface(vrf *netlink.Vrf, intf string) error {
 		return fmt.Errorf("could not set vrf %s as master of %s: %v", vrf.Name, intf, err)
 	}
 
-	for _, addr := range addresses {
-		err = netlink.AddrAdd(i, &addr)
+	afterAddresses, err := netlink.AddrList(i, netlink.FAMILY_V6)
+	if err != nil {
+		return fmt.Errorf("failed getting ipv6 new addresses for %s", intf)
+	}
+
+	// Since keeping the ipv6 address depends on net.ipv6.conf.all.keep_addr_on_down ,
+	// we check if the new interface does not have them and in case we restore them.
+CONTINUE:
+	for _, toFind := range beforeAddresses {
+		for _, current := range afterAddresses {
+			if toFind.Equal(current) {
+				continue CONTINUE
+			}
+		}
+		// Not found, re-adding it
+		err = netlink.AddrAdd(i, &toFind)
 		if err != nil {
-			return fmt.Errorf("could not restore address %s to %s @ %s: %v", addr, intf, vrf.Name, err)
+			return fmt.Errorf("could not restore address %s to %s @ %s: %v", toFind, intf, vrf.Name, err)
 		}
 	}
 
