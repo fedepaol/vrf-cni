@@ -17,7 +17,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-func buildOneConfig(name, cniVersion string, orig *VrfNetConf, prevResult types.Result) (*VrfNetConf, []byte, error) {
+func buildOneConfig(name, cniVersion string, orig *VRFNetConf, prevResult types.Result) (*VRFNetConf, []byte, error) {
 	var err error
 
 	inject := map[string]interface{}{
@@ -51,7 +51,7 @@ func buildOneConfig(name, cniVersion string, orig *VrfNetConf, prevResult types.
 		return nil, nil, err
 	}
 
-	conf := &VrfNetConf{}
+	conf := &VRFNetConf{}
 	if err := json.Unmarshal(newBytes, &conf); err != nil {
 		return nil, nil, fmt.Errorf("error parsing configuration: %s", err)
 	}
@@ -160,6 +160,47 @@ var _ = Describe("vrf plugin", func() {
 		err = targetNS.Do(func(ns.NetNS) error {
 			defer GinkgoRecover()
 			checkInterfaceOnVRF(VRF0Name, IF0Name)
+			return nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("fails if the interface already has a master set", func() {
+		conf := confFor("test", IF0Name, VRF0Name, "10.0.0.2/24")
+
+		By("Setting the interface's master", func() {
+			err := targetNS.Do(func(ns.NetNS) error {
+				defer GinkgoRecover()
+				l, err := netlink.LinkByName(IF0Name)
+				Expect(err).NotTo(HaveOccurred())
+				br := &netlink.Bridge{
+					LinkAttrs: netlink.LinkAttrs{
+						Name: "testrbridge",
+					},
+				}
+				err = netlink.LinkAdd(br)
+				Expect(err).NotTo(HaveOccurred())
+				err = netlink.LinkSetMaster(l, br)
+				Expect(err).NotTo(HaveOccurred())
+				return nil
+			})
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		args := &skel.CmdArgs{
+			ContainerID: "dummy",
+			Netns:       targetNS.Path(),
+			IfName:      IF0Name,
+			StdinData:   conf,
+		}
+
+		err := originalNS.Do(func(ns.NetNS) error {
+			defer GinkgoRecover()
+			_, _, err := testutils.CmdAddWithArgs(args, func() error {
+				return cmdAdd(args)
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("has already a master set"))
 			return nil
 		})
 		Expect(err).NotTo(HaveOccurred())
@@ -297,6 +338,71 @@ var _ = Describe("vrf plugin", func() {
 		Entry("added to the same vrf IPV6", VRF0Name, VRF0Name, "2A00:0C98:2060:A000:0001:0000:1d1e:ca75/64", "2A00:0C98:2060:A000:0001:0000:1d1e:ca76/64"),
 		Entry("added to different vrfs IPV6", VRF0Name, VRF1Name, "2A00:0C98:2060:A000:0001:0000:1d1e:ca75/64", "2A00:0C98:2060:A000:0001:0000:1d1e:ca76/64"),
 		Entry("added to different vrfs with same ip IPV6", VRF0Name, VRF1Name, "2A00:0C98:2060:A000:0001:0000:1d1e:ca75/64", "2A00:0C98:2060:A000:0001:0000:1d1e:ca75/64"),
+	)
+
+	DescribeTable("handle tableid conflicts",
+		func(vrf0, vrf1 string, tableid0, tableid1 int, expectedError string) {
+			conf0 := confWithTableFor("test", IF0Name, vrf0, "10.0.0.2/24", tableid0)
+			conf1 := confWithTableFor("test1", IF1Name, vrf1, "10.0.0.2/24", tableid1)
+
+			By("Adding the first interface to first vrf", func() {
+				err := originalNS.Do(func(ns.NetNS) error {
+					defer GinkgoRecover()
+					args := &skel.CmdArgs{
+						ContainerID: "dummy",
+						Netns:       targetNS.Path(),
+						IfName:      IF0Name,
+						StdinData:   conf0,
+					}
+					_, _, err := testutils.CmdAddWithArgs(args, func() error {
+						return cmdAdd(args)
+					})
+					Expect(err).NotTo(HaveOccurred())
+					return nil
+				})
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			By("Checking that the first vrf has the right routing table", func() {
+				err := targetNS.Do(func(ns.NetNS) error {
+					defer GinkgoRecover()
+
+					l, err := netlink.LinkByName(vrf0)
+					Expect(err).NotTo(HaveOccurred())
+					vrf := l.(*netlink.Vrf)
+					Expect(vrf.Table).To(Equal(uint32(tableid0)))
+					return nil
+				})
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			By("Adding the second interface to second vrf", func() {
+				err := originalNS.Do(func(ns.NetNS) error {
+					defer GinkgoRecover()
+					args := &skel.CmdArgs{
+						ContainerID: "dummy",
+						Netns:       targetNS.Path(),
+						IfName:      IF1Name,
+						StdinData:   conf1,
+					}
+					_, _, err := testutils.CmdAddWithArgs(args, func() error {
+						return cmdAdd(args)
+					})
+
+					if expectedError != "" {
+						Expect(err).To(HaveOccurred())
+						Expect(err.Error()).To(ContainSubstring(expectedError))
+					} else {
+						Expect(err).NotTo(HaveOccurred())
+					}
+					return nil
+				})
+				Expect(err).NotTo(HaveOccurred())
+			})
+		},
+		Entry("same vrf with same tableid", VRF0Name, VRF0Name, 1001, 1001, ""),
+		Entry("same vrf with different tableids", VRF0Name, VRF0Name, 1001, 1002, "already exist with different routing table"),
+		Entry("different vrf with same tableid", VRF0Name, VRF1Name, 1001, 1001, "already used by"),
 	)
 
 	It("removes the VRF only when the last interface is removed", func() {
@@ -469,7 +575,7 @@ var _ = Describe("vrf plugin", func() {
 		err = originalNS.Do(func(ns.NetNS) error {
 			defer GinkgoRecover()
 			cniVersion := "0.4.0"
-			n := &VrfNetConf{}
+			n := &VRFNetConf{}
 			err = json.Unmarshal([]byte(conf), &n)
 			_, confString, err := buildOneConfig("testConfig", cniVersion, n, prevRes)
 			Expect(err).NotTo(HaveOccurred())
@@ -512,6 +618,30 @@ func confFor(name, intf, vrf, ip string) []byte {
 			]
 		}
 	}`, name, vrf, intf, ip)
+	return []byte(conf)
+}
+
+func confWithTableFor(name, intf, vrf, ip string, tableID int) []byte {
+	conf := fmt.Sprintf(`{
+		"name": "%s",
+		"type": "vrf",
+		"cniVersion": "0.3.1",
+		"vrfName": "%s",
+		"table": %d,
+		"prevResult": {
+			"interfaces": [
+				{"name": "%s", "sandbox":"netns"}
+			],
+			"ips": [
+				{
+					"version": "4",
+					"address": "%s",
+					"gateway": "10.0.0.1",
+					"interface": 0
+				}
+			]
+		}
+	}`, name, vrf, tableID, intf, ip)
 	return []byte(conf)
 }
 

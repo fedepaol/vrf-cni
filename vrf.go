@@ -35,15 +35,23 @@ func findVRF(name string) (*netlink.Vrf, error) {
 }
 
 // createVRF creates a new VRF and sets it up.
-func createVRF(name string) (*netlink.Vrf, error) {
+func createVRF(name string, tableID uint32) (*netlink.Vrf, error) {
 	links, err := netlink.LinkList()
 	if err != nil {
 		return nil, fmt.Errorf("createVRF: Failed to find links %v", err)
 	}
-	tableID, err := findFreeRoutingTableID(links)
-	if err != nil {
-		return nil, err
+
+	if tableID != 0 {
+		if vrf, ok := findVRFForTable(tableID, links); ok {
+			return nil, fmt.Errorf("Can't create VRF %s with tableid %d, already used by %s", name, tableID, vrf)
+		}
+	} else {
+		tableID, err = findFreeRoutingTableID(links)
+		if err != nil {
+			return nil, err
+		}
 	}
+
 	vrf := &netlink.Vrf{
 		LinkAttrs: netlink.LinkAttrs{
 			Name: name,
@@ -85,6 +93,14 @@ func addInterface(vrf *netlink.Vrf, intf string) error {
 		return fmt.Errorf("could not get link by name %s", intf)
 	}
 
+	if i.Attrs().MasterIndex != 0 {
+		master, err := netlink.LinkByIndex(i.Attrs().MasterIndex)
+		if err != nil {
+			return fmt.Errorf("interface %s has already a master set, could not retrieve the name: %v", intf, err)
+		}
+		return fmt.Errorf("interface %s has already a master set: %s", intf, master.Attrs().Name)
+	}
+
 	// IPV6 addresses are not maintained unless
 	// sysctl -w net.ipv6.conf.all.keep_addr_on_down=1 is called
 	// so we save it, and restore it back.
@@ -121,6 +137,17 @@ CONTINUE:
 	return nil
 }
 
+func findVRFForTable(tableID uint32, links []netlink.Link) (string, bool) {
+	for _, l := range links {
+		if vrf, ok := l.(*netlink.Vrf); ok {
+			if vrf.Table == tableID {
+				return vrf.Name, true
+			}
+		}
+	}
+	return "", false
+}
+
 func findFreeRoutingTableID(links []netlink.Link) (uint32, error) {
 	takenTables := make(map[uint32]struct{}, len(links))
 	for _, l := range links {
@@ -135,4 +162,16 @@ func findFreeRoutingTableID(links []netlink.Link) (uint32, error) {
 		}
 	}
 	return 0, fmt.Errorf("findFreeRoutingTableID: Failed to find an available routing id")
+}
+
+func resetMaster(interfaceName string) error {
+	intf, err := netlink.LinkByName(interfaceName)
+	if err != nil {
+		return fmt.Errorf("resetMaster: could not get link by name %s", interfaceName)
+	}
+	err = netlink.LinkSetNoMaster(intf)
+	if err != nil {
+		return fmt.Errorf("resetMaster: could reset master to %s", interfaceName)
+	}
+	return nil
 }

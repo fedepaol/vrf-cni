@@ -29,12 +29,14 @@ import (
 	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 )
 
-// VrfNetConf represents the firewall configuration.
-type VrfNetConf struct {
+// VRFNetConf represents the vrf configuration.
+type VRFNetConf struct {
 	types.NetConf
 
-	// Vrf is the name of the vrf to add the interface to.
+	// VRFName is the name of the vrf to add the interface to.
 	VRFName string `json:"vrfname"`
+	// Table is the optional name of the routing table set for the vrf
+	Table uint32 `json:"table"`
 }
 
 func main() {
@@ -52,17 +54,21 @@ func cmdAdd(args *skel.CmdArgs) error {
 	}
 
 	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
-		v, err := findVRF(conf.VRFName)
+		vrf, err := findVRF(conf.VRFName)
+
+		if err == nil && conf.Table != 0 && vrf.Table != conf.Table {
+			return fmt.Errorf("VRF %s already exist with different routing table %d", conf.VRFName, vrf.Table)
+		}
 
 		if _, ok := err.(netlink.LinkNotFoundError); ok {
-			v, err = createVRF(conf.VRFName)
+			vrf, err = createVRF(conf.VRFName, conf.Table)
 		}
 
 		if err != nil {
 			return err
 		}
 
-		err = addInterface(v, args.IfName)
+		err = addInterface(vrf, args.IfName)
 		if err != nil {
 			return err
 		}
@@ -86,24 +92,29 @@ func cmdDel(args *skel.CmdArgs) error {
 		return err
 	}
 	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
-		v, err := findVRF(conf.VRFName)
+		vrf, err := findVRF(conf.VRFName)
 		if err != nil {
 			return err
 		}
 
-		interfaces, err := assignedInterfaces(v)
+		err = resetMaster(args.IfName)
+		if err != nil {
+			return err
+		}
+
+		interfaces, err := assignedInterfaces(vrf)
 		if err != nil {
 			return err
 		}
 
 		// Meaning, we are deleting the last interface assigned to the VRF
-		if len(interfaces) == 1 && interfaces[0].Attrs().Name == args.IfName {
-			err = netlink.LinkDel(v)
+		if len(interfaces) == 0 {
+			err = netlink.LinkDel(vrf)
 			if err != nil {
 				return err
 			}
 		}
-		return err
+		return nil
 	})
 
 	if err != nil {
@@ -124,15 +135,15 @@ func cmdCheck(args *skel.CmdArgs) error {
 	}
 
 	err = ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
-		v, err := findVRF(conf.VRFName)
+		vrf, err := findVRF(conf.VRFName)
 		if err != nil {
 			return err
 		}
-		ii, err := assignedInterfaces(v)
+		vrfInterfaces, err := assignedInterfaces(vrf)
 
 		found := false
-		for _, i := range ii {
-			if i.Attrs().Name == args.IfName {
+		for _, intf := range vrfInterfaces {
+			if intf.Attrs().Name == args.IfName {
 				found = true
 				break
 			}
@@ -146,8 +157,8 @@ func cmdCheck(args *skel.CmdArgs) error {
 	return nil
 }
 
-func parseConf(data []byte) (*VrfNetConf, *current.Result, error) {
-	conf := VrfNetConf{}
+func parseConf(data []byte) (*VRFNetConf, *current.Result, error) {
+	conf := VRFNetConf{}
 	if err := json.Unmarshal(data, &conf); err != nil {
 		return nil, nil, fmt.Errorf("failed to load netconf: %v", err)
 	}
@@ -156,7 +167,6 @@ func parseConf(data []byte) (*VrfNetConf, *current.Result, error) {
 		return nil, nil, fmt.Errorf("configuration is expected to have a valid vrf name")
 	}
 
-	// Parse previous result.
 	if conf.RawPrevResult == nil {
 		// return early if there was no previous result, which is allowed for DEL calls
 		return &conf, &current.Result{}, nil
